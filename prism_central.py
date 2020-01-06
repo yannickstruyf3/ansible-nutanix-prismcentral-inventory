@@ -99,8 +99,12 @@ optional arguments:
 ######################################################################
 
 
-import urllib2
-import base64
+import requests
+from requests.auth import HTTPBasicAuth
+#prevent insecure warnings
+from urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+# import base64
 import socket
 import sys
 import pprint
@@ -150,51 +154,37 @@ class PcManager():
             self.ip_addr, self.sub_url)
         if self.body and self.content_type == "application/json":
             self.body = json.dumps(self.body)
-        request = urllib2.Request(base_url, data=self.body)
-        base64string = base64.encodestring(
-            '%s:%s' %
-            (self.username, self.password)).replace(
-            '\n', '')
-        request.add_header("Authorization", "Basic %s" % base64string)
-
-        request.add_header(
-            'Content-Type',
-            '%s; charset=utf-8' %
-            self.content_type)
-        request.get_method = lambda: self.method
-
-        try:
-            if sys.version_info >= (2, 7, 5):
-                ssl_context = ssl._create_unverified_context()
-                response = urllib2.urlopen(request, context=ssl_context)
-            else:
-                response = urllib2.urlopen(request)
-            result = ""
-            if self.response_file:
-                chunk = 16 * 1024
-                with open(self.response_file, "wb") as of:
-                    while True:
-                        content = response.read(chunk)
-                        if not content:
-                            break
-                        of.write(content)
-            else:
-                result = response.read()
-                if result:
-                    result = json.loads(result)
-            return result
-        except urllib2.HTTPError as e:
-            err_result = e.read()
-            if err_result:
-                try:
-                    err_result = json.loads(err_result)
-                except:
-                    print "Error: %s" % e
-                    return "408", None
-            return "408", err_result
-        except Exception as e:
-            print "Error: %s" % e
-            return "408", None
+        headers = {
+            'Content-Type': '%s; charset=utf-8' % self.content_type,
+        }
+        #Get de desired action GET/POST/PUT/... from requests module. Return None if not found
+        action = getattr(requests, self.method.lower(), None)
+        if action:
+            #If body None, init default dict
+            if not self.body:
+                self.body = {}
+            #Invoke requests module
+            response = action(
+                base_url,
+                headers=headers,
+                auth= HTTPBasicAuth(
+                    self.username, 
+                    self.password
+                ),
+                verify=False,
+                json=json.loads(self.body)
+            )
+            #Read status code
+            status_code = response.status_code
+            response_json = response.json()
+            if status_code < 200 or status_code > 299:
+                print("Request to {} failed with status code {}. Error: {}".format(
+                    base_url, status_code, response_json))
+                return status_code, None
+            return response_json
+        else:
+            print("Error: Invalid HTTP method requested %s" % self.method)
+            return "400", None
 
     def list_vms(self):
         body = {
@@ -488,6 +478,7 @@ class PrismCentralInventory(object):
         }
 
         # add all vms by id and name
+        # print("data: {}".format(json.dumps(self.data)))
         for vm in self.data['vms']['entities']:
             for net in vm['status']['resources']['nic_list']:
                 if net['ip_endpoint_list']:
@@ -501,11 +492,13 @@ class PrismCentralInventory(object):
 
             self.add_host(vm['status']['name'], dest)
 
+            #added for vms that do not have owner_references or project_references
+            unknown = {"name": "unknown"}
             ## groups that are always present
             for group in (['prism_central',
                            'cluster_' + vm['status']['cluster_reference']['name'].lower(),
-                           'project_' + vm['metadata']['project_reference']['name'].lower(),
-                           'owner_' + vm['metadata']['owner_reference']['name'].lower(),
+                           'project_' + vm['metadata'].get('project_reference',unknown)['name'].lower(),
+                           'owner_' + vm['metadata'].get('owner_reference',unknown)['name'].lower(),
                            'hypervisor_' + vm['status']['resources']['hypervisor_type'].lower(),
                            'status_' + vm['status']['resources']['power_state'].lower()]):
                 self.add_host(group, dest)
