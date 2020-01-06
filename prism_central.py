@@ -478,7 +478,6 @@ class PrismCentralInventory(object):
         }
 
         # add all vms by id and name
-        # print("data: {}".format(json.dumps(self.data)))
         for vm in self.data['vms']['entities']:
             for net in vm['status']['resources']['nic_list']:
                 if net['ip_endpoint_list']:
